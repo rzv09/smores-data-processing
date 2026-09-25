@@ -1,2 +1,33 @@
+# Notebooks — local scratch only
 jupyter-notebooks/
 *.ipynb
+.ipynb_checkpoints
+
+# Secrets
+*.env
+.env
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Data and model artifacts — keep the directory structure, not the contents
+data/**
+!data/**/
+!data/**/.gitkeep
+models/**
+!models/**/
+!models/**/.gitkeep
+reports/figures/*
+!reports/figures/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
