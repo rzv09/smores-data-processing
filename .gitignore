@@ -22,6 +22,7 @@ build/
 data/**
 !data/**/
 !data/**/.gitkeep
+!data/**/*.md
 models/**
 !models/**/
 !models/**/.gitkeep
