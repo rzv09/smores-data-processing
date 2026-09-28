@@ -36,8 +36,8 @@ src/smores/
 ├── features/                               transformations, feature engineering
 ├── models/                                 training and prediction
 └── viz/                                    reusable plotting
-data/                                       see data/data.md
-├── data.md                                 full data reference
+data/                                       see data/README.md
+├── README.md                               full data reference
 ├── raw/                                    immutable inputs — never edited in place
 │   ├── florida_keys/
 │   │   └── florida_keys_data.csv           203 MB · 2,044,805 × 10   [present]
@@ -45,6 +45,7 @@ data/                                       see data/data.md
 │       └── FULL data from Harvard team/    Harvard drop             [not added yet]
 ├── interim/                                intermediate outputs
 ├── processed/                              analysis-ready datasets
+│   └── florida_keys_o2.parquet             62 MB · 6,134,415 × 12   [built]
 └── external/                               third-party data
 models/                                     serialized model artifacts
 reports/figures/                            exported plots
@@ -55,8 +56,9 @@ jupyter-notebooks/                          exploratory work (gitignored)
 Everything under `data/`, `models/`, and `reports/figures/` is gitignored — only the
 directory structure is tracked, via `.gitkeep`.
 
-**[`data/data.md`](data/data.md)** is the full data reference: the same layout plus
-per-column types and ranges, the deployment breakdown, and loading notes.
+**[`data/README.md`](data/README.md)** is the full data reference: the same layout plus
+per-column types and units, the deployment breakdown, the processed-output schema, and the
+reasoning behind each transform.
 
 ## Conventions
 
@@ -96,7 +98,7 @@ or breaks because of that — `Path` objects don't touch the filesystem. When th
 lands, drop it at that exact path and the constant starts working; no code change
 needed. Guard any early Biscayne code with `if BISCAYNE_HARVARD_DIR.exists():`.
 
-See **[`data/data.md`](data/data.md)** for per-column ranges and the deployment row
+See **[`data/README.md`](data/README.md)** for per-column ranges and the deployment row
 counts.
 
 **Notebooks are gitignored** as they aren't well configured for github view
