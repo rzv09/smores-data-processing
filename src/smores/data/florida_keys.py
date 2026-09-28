@@ -48,8 +48,9 @@ umol/L (fresh) = 250 umol/L, where the true concentration is 105% x 195.9 = 206 
 
 So dividing the reported umol/L by freshwater solubility recovers the sensor's original
 calibrated reading rather than inventing a correction. `do_sat` is that recovered
-percentage and `do_mgl` the true in-situ mg/L. `raw_o2_umol` keeps the reported value
-untouched so the published figures stay traceable and the correction stays reversible.
+percentage and `do_mgl` the true in-situ mg/L. `do_native_value` (with
+`do_native_unit` "umol/L") keeps the reported value untouched so the published
+figures stay traceable and the correction stays reversible.
 
 The corrected series corroborates itself: it runs 99.9% pre-dawn to 108.9% in the
 evening, crossing saturation daily, which is what a net-autotrophic carbonate platform
@@ -74,7 +75,9 @@ Dropped
 `Vx/Vy/Vz` are dropped; the harmonized schema is oxygen-only. Note for anyone extending
 this: the benthic O2 flux this deployment exists to measure is the <w'C'> covariance of
 those velocities with the oxygen signal, so flux work must go back to the raw CSV, which
-stays immutable in `data/raw/`. `P` survives only as `depth_m`.
+stays immutable in `data/raw/`. `P` survives only as `depth_m`. The height of the ADV
+above the seabed (0.35 m, `HEIGHT_ABOVE_BED_M`) is not part of the shared schema; it is
+recorded here as a constant for context on `depth_m` rather than as an output column.
 """
 
 import numpy as np
@@ -115,12 +118,15 @@ O2SOL_FRESH_UMOL_L = float(
     o2sol_umol_l(ASSUMED_TEMPERATURE_C, 0.0, DENSITY_FRESH_KG_M3)
 )
 
+DO_NATIVE_UNIT = "umol/L"
+
 SAMPLE_INTERVAL_S = 0.125
 SENSOR_MAP = {"O2_S1": "FL1", "O2_S2": "FL2", "O2_S3": "FL3"}
-SENSOR_DTYPE = pd.CategoricalDtype(tuple(SENSOR_MAP.values()), ordered=True)
+# Ordered categorical used only internally, to keep sort order stable; the schema
+# requires `sensor_id` to come out as plain str.
+SENSOR_SORT_DTYPE = pd.CategoricalDtype(tuple(SENSOR_MAP.values()), ordered=True)
 
 RAW_COLUMNS = ["deployment", "t", "t_increase", "P", *SENSOR_MAP]
-EXTRA_COLUMNS = ("deployment",)
 
 
 def load_raw(path=None):
@@ -188,27 +194,31 @@ def to_schema(df):
                     "sensor_id": sensor_id,
                     "do_sat": do_sat,
                     "do_mgl": mgl_from_saturation(do_sat, O2SOL_SITE_UMOL_L),
-                    "raw_o2_umol": raw_o2,
-                    "deployment": df["deployment"],
+                    "do_native_value": raw_o2,
+                    "deployment_id": df["deployment"],
                 }
             )
         )
 
     long = pd.concat(frames, ignore_index=True)
-    long["sensor_id"] = long["sensor_id"].astype(SENSOR_DTYPE)
-    long = long.sort_values(["timestamp", "sensor_id"], kind="stable", ignore_index=True)
+    # Sort with sensor_id temporarily categorical, for stable sensor ordering within
+    # a timestamp; the schema requires the column to come out as plain str.
+    long["_sensor_sort"] = long["sensor_id"].astype(SENSOR_SORT_DTYPE)
+    long = long.sort_values(["timestamp", "_sensor_sort"], kind="stable", ignore_index=True)
+    long = long.drop(columns="_sensor_sort")
 
     long["site_id"] = SITE_ID
     long["data_source"] = DATA_SOURCE
-    long["height_above_bed_m"] = HEIGHT_ABOVE_BED_M
     long["temperature_c"] = np.nan  # never logged; only a 28-31 C range is documented
     long["qc_flag"] = 0  # no nulls, no gaps and no duplicates in the source
-    long["deployment"] = long["deployment"].astype("category")
+    long["do_native_unit"] = DO_NATIVE_UNIT
+    long["deployment_id"] = long["deployment_id"].astype(str)
+    long["sensor_id"] = long["sensor_id"].astype(str)
 
-    out = long[list(schema.COLUMNS) + list(EXTRA_COLUMNS)].astype(
-        {name: schema.DTYPES[name] for name in schema.COLUMNS if name != "sensor_id"}
+    out = long[list(schema.COLUMNS)].astype(
+        {name: schema.DTYPES[name] for name in schema.COLUMNS if name not in ("deployment_id", "sensor_id")}
     )
-    return schema.validate(out, extra_columns=EXTRA_COLUMNS)
+    return schema.validate(out)
 
 
 def build(write=True, path=None, out_path=None):
@@ -226,7 +236,7 @@ def main():
     print(f"wrote {len(out):,} rows to {config.FLORIDA_KEYS_PARQUET}")
     print(
         f"  {out['timestamp'].min()} -> {out['timestamp'].max()}  "
-        f"({out['sensor_id'].nunique()} sensors, {out['deployment'].nunique()} deployments)"
+        f"({out['sensor_id'].nunique()} sensors, {out['deployment_id'].nunique()} deployments)"
     )
     print(f"  do_sat  mean {out['do_sat'].mean():.2f}%  range "
           f"{out['do_sat'].min():.2f}-{out['do_sat'].max():.2f}%")

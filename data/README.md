@@ -125,16 +125,19 @@ The harmonized schema that all three sites conform to lives in `smores.data.sche
 | --- | --- | --- |
 | `timestamp` | `datetime64[ns, UTC]` | reconstructed; sort key |
 | `site_id` | `category` | `florida_keys` |
-| `depth_m` | `float32` | from gauge pressure; mean 8.232 m |
-| `height_above_bed_m` | `float32` | 0.35 |
-| `sensor_id` | `category` | `FL1`, `FL2`, `FL3` |
+| `deployment_id` | `str` | one of the four deployments below; see note on gaps |
+| `sensor_id` | `str` | `FL1`, `FL2`, `FL3` |
 | `do_sat` | `float32` | % air saturation; mean 104.90 |
-| `do_mgl` | `float32` | mg/L; mean 6.574 |
-| `raw_o2_umol` | `float32` | reported value, untouched; mean 249.987 |
 | `temperature_c` | `float32` | all null — never logged |
+| `do_mgl` | `float32` | mg/L; mean 6.574 |
+| `do_native_value` | `float32` | reported value, untouched; mean 249.987 |
+| `do_native_unit` | `category` | `umol/L` |
 | `qc_flag` | `int8` | all 0; the source has no defects to flag |
 | `data_source` | `category` | `wcci_fl` |
-| `deployment` | `category` | retained beyond the shared schema, see below |
+| `depth_m` | `float32` | from gauge pressure; mean 8.232 m |
+
+Column order matches `smores.data.schema.COLUMNS` exactly — that order is part of the
+schema, not incidental, so a diff between two sites' outputs stays readable.
 
 Three transforms are judgement calls rather than renames, so they are recorded here as
 well as in the `smores.data.florida_keys` module docstring.
@@ -158,8 +161,8 @@ correctly referenced quantity, and the µmol/L figures were derived from it usin
 original calibrated reading rather than inventing a correction. Reported concentrations
 are high by a factor of ~1.22. The corrected series runs 96.5–113.9%, crossing 100%
 daily, as a net-autotrophic carbonate platform should; the uncorrected one sits at
-121–133% and never crosses. `raw_o2_umol` preserves the published value so the correction
-stays auditable and reversible.
+121–133% and never crosses. `do_native_value` (with `do_native_unit` `umol/L`) preserves
+the published value so the correction stays auditable and reversible.
 
 Caveat: with no temperature record, solubility uses the 29.5 °C midpoint of the
 documented range. Across 28–31 °C that shifts *absolute* `do_sat` by ±2.7%, exceeding the
@@ -175,8 +178,12 @@ per-deployment swings of 0.58–0.89 m — a plausible Keys tidal range.
 **`Vx/Vy/Vz` are dropped** — the harmonized schema is oxygen-only. The benthic O2 flux
 this deployment exists to measure is the ⟨w′C′⟩ covariance of those velocities with the
 oxygen signal, so flux work must read the raw CSV, which stays immutable. `P` survives
-only as `depth_m`. `deployment` is kept beyond the shared schema because segments are
-separated by 3–28 h gaps that eddy-covariance windowing must not straddle.
+only as `depth_m`. The source `deployment` column maps directly onto the schema's
+required `deployment_id` — segments are separated by 3–28 h gaps that eddy-covariance
+windowing must not straddle, so it stays a first-class column rather than a
+site-specific extra. The 0.35 m ADV height above the seabed is not part of the shared
+schema; it lives as `HEIGHT_ABOVE_BED_M` in `smores.data.florida_keys`, for context on
+`depth_m` only.
 
 When aggregating by hour of day, filter on sample count: deployment coverage is uneven and
 the 08:00 bin holds only 3 rows, which is enough to produce a spurious trough.
