@@ -73,6 +73,32 @@ df.to_parquet(PROCESSED_DIR / "florida_keys_clean.parquet")
 
 This works identically from a notebook, a test, or the CLI.
 
+### Harmonized schema
+
+Every site's processed output conforms to the same long-format schema
+(`smores.data.schema`) — one row per sensor reading per instant:
+
+| Column | dtype | Required | Notes |
+| --- | --- | --- | --- |
+| `timestamp` | `datetime64[ns, UTC]` | yes | sort key |
+| `site_id` | `category` | yes | `biscayne_bay`, `florida_keys`, `santa_barbara` |
+| `deployment_id` | `str` | yes | first class — never a bonus column |
+| `sensor_id` | `str` | yes | |
+| `do_sat` | `float32` | yes | percent air saturation — the universal target |
+| `temperature_c` | `float32` | no | NaN where not logged |
+| `do_mgl` | `float32` | no | NaN where it can't be derived |
+| `do_native_value` | `float32` | no | original reported value, untouched |
+| `do_native_unit` | `category` | no | `umol/L`, `pO2_hPa`, `umol/kg` |
+| `qc_flag` | `int8` | yes | `0` if the source has no QC of its own |
+| `data_source` | `category` | yes | `smores_2026`, `wcci_fl`, `wcci_sb` |
+| `depth_m` | `float32` | no | NaN where not applicable |
+
+`do_sat` is required from every site because it's the one variable comparable across
+sensors that natively report in different units — `do_native_value`/`do_native_unit`
+keep the original reading around so the conversion to `do_sat` stays auditable and
+reversible. See **[`data/README.md`](data/README.md)** for how each site's raw format
+maps onto this schema.
+
 ### Dataset paths
 
 Every raw dataset has a constant in `smores.config` — use it instead of hardcoding a

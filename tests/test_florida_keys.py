@@ -131,13 +131,14 @@ def test_do_mgl_is_the_true_in_situ_concentration():
     assert out["do_mgl"].iloc[0] < 7.5
 
 
-def test_raw_o2_is_carried_through_untouched():
+def test_do_native_value_is_carried_through_untouched():
     """The audit column must stay byte-comparable to the published figures."""
     frame = raw_frame(o2=243.179754583)
     out = fk.to_schema(frame)
-    assert out["raw_o2_umol"].unique().tolist() == [
+    assert out["do_native_value"].unique().tolist() == [
         pytest.approx(243.179754583, rel=1e-6)
     ]
+    assert out["do_native_unit"].unique().tolist() == ["umol/L"]
 
 
 def test_melt_triples_rows_and_labels_every_sensor():
@@ -153,29 +154,30 @@ def test_sensors_differ_per_row_and_stay_aligned():
     frame = raw_frame(rows=2)
     frame[["O2_S1", "O2_S2", "O2_S3"]] = [[240.0, 250.0, 260.0]] * 2
     out = fk.to_schema(frame).set_index("sensor_id")
-    assert out.loc["FL1", "raw_o2_umol"].unique() == pytest.approx([240.0])
-    assert out.loc["FL2", "raw_o2_umol"].unique() == pytest.approx([250.0])
-    assert out.loc["FL3", "raw_o2_umol"].unique() == pytest.approx([260.0])
+    assert out.loc["FL1", "do_native_value"].unique() == pytest.approx([240.0])
+    assert out.loc["FL2", "do_native_value"].unique() == pytest.approx([250.0])
+    assert out.loc["FL3", "do_native_value"].unique() == pytest.approx([260.0])
 
 
 def test_output_conforms_to_the_schema():
     out = fk.to_schema(raw_frame(rows=5))
-    schema.validate(out, extra_columns=fk.EXTRA_COLUMNS)
-    assert list(out.columns) == list(schema.COLUMNS) + list(fk.EXTRA_COLUMNS)
+    schema.validate(out)
+    assert list(out.columns) == list(schema.COLUMNS)
     assert out["site_id"].unique().tolist() == ["florida_keys"]
     assert out["data_source"].unique().tolist() == ["wcci_fl"]
+    assert pd.api.types.is_string_dtype(out["deployment_id"])
+    assert pd.api.types.is_string_dtype(out["sensor_id"])
 
 
 def test_temperature_is_all_null_and_qc_is_all_good():
     out = fk.to_schema(raw_frame(rows=5))
     assert out["temperature_c"].isna().all()
     assert (out["qc_flag"] == 0).all()
-    assert out["height_above_bed_m"].to_numpy() == pytest.approx(0.35)
 
 
 def test_no_nulls_in_the_measured_columns():
     out = fk.to_schema(raw_frame(rows=5))
-    assert not out[["timestamp", "do_sat", "do_mgl", "depth_m", "raw_o2_umol"]].isna().any().any()
+    assert not out[["timestamp", "do_sat", "do_mgl", "depth_m", "do_native_value"]].isna().any().any()
 
 
 def test_output_is_sorted_by_timestamp():
@@ -202,7 +204,7 @@ def test_build_round_trips_through_parquet(tmp_path):
     destination = tmp_path / "out.parquet"
     written = fk.build(write=True, path=csv, out_path=destination)
     assert destination.is_file()
-    schema.validate(pd.read_parquet(destination), extra_columns=fk.EXTRA_COLUMNS)
+    schema.validate(pd.read_parquet(destination))
     pd.testing.assert_frame_equal(pd.read_parquet(destination), written)
 
 
@@ -216,16 +218,16 @@ def test_full_dataset_transforms_to_expected_shape_and_ranges():
     assert len(out) == 6_134_415  # 2,044,805 rows x 3 sensors
     assert out["timestamp"].min() == pd.Timestamp("2017-07-12 18:00:00", tz="UTC")
     assert out["timestamp"].max() == pd.Timestamp("2017-07-17 10:00:00", tz="UTC")
-    assert out["deployment"].nunique() == 4
+    assert out["deployment_id"].nunique() == 4
 
     assert out["do_sat"].mean() == pytest.approx(104.9, abs=0.5)
     assert 90.0 < out["do_sat"].min() and out["do_sat"].max() < 120.0
     assert out["depth_m"].mean() == pytest.approx(8.23, abs=0.05)
     assert out["depth_m"].between(7.5, 9.0).all()
-    assert out["raw_o2_umol"].mean() == pytest.approx(249.99, abs=0.01)
+    assert out["do_native_value"].mean() == pytest.approx(249.99, abs=0.01)
 
     # Per-sensor, per-deployment spacing stays on the 8 Hz grid.
-    one = out[(out["sensor_id"] == "FL1") & (out["deployment"] == "3oec_2017_7_15_16")]
+    one = out[(out["sensor_id"] == "FL1") & (out["deployment_id"] == "3oec_2017_7_15_16")]
     assert one["timestamp"].diff().dropna().unique().tolist() == [
         pd.Timedelta(milliseconds=125)
     ]
