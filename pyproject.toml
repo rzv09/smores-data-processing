@@ -36,3 +36,6 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: touches the full raw dataset; deselect with -m 'not slow'",
+]

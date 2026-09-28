@@ -23,6 +23,9 @@ EXTERNAL_DIR = DATA_DIR / "external"
 FLORIDA_KEYS_CSV = FLORIDA_DIR / "florida_keys_data.csv"
 BISCAYNE_HARVARD_DIR = BISCAYNE_DIR / "FULL data from Harvard team"
 
+# Harmonized outputs, written by the per-site modules in smores.data.
+FLORIDA_KEYS_PARQUET = PROCESSED_DIR / "florida_keys_o2.parquet"
+
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"

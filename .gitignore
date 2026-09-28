@@ -29,6 +29,9 @@ models/**
 reports/figures/*
 !reports/figures/.gitkeep
 
+# Working notes — local scratch only
+notes/
+
 # OS
 .DS_Store
 Thumbs.db

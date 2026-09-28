@@ -1,4 +1,4 @@
-.PHONY: setup test lint format clean
+.PHONY: setup test lint format data clean
 
 setup:
 	uv sync
@@ -12,6 +12,9 @@ lint:
 
 format:
 	uv run ruff format .
+
+data:
+	uv run python -m smores.data.florida_keys
 
 clean:
 	rm -rf .pytest_cache .ruff_cache
