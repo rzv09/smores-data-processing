@@ -1,5 +1,9 @@
 """
-This file processes the SB dataset 
+This file processes the SB dataset
+
+Author: Raman Zatsarenko (github.com/rzv09).
+Vendored verbatim from rzv09/smores_proj, `src/data_processing/santa_barbara/process_sb.py`.
+Retained here unmodified for reference; edit upstream rather than here.
 """
 from data_processing.data_utils import standardize_piece
 import pandas as pd

@@ -1,5 +1,9 @@
 """
 This file processes the 3OEC dataset https://www.bco-dmo.org/dataset/849934
+
+Author: Raman Zatsarenko (github.com/rzv09).
+Vendored verbatim from rzv09/smores_proj, `src/data_processing/three_oec/process_3oec.py`.
+Retained here unmodified for reference; edit upstream rather than here.
 """
 
 import pandas as pd
