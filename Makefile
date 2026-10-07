@@ -1,4 +1,4 @@
-.PHONY: setup test lint format data clean
+.PHONY: setup test lint format data baselines clean
 
 setup:
 	uv sync
@@ -15,6 +15,9 @@ format:
 
 data:
 	uv run python -m smores.data.florida_keys
+
+baselines:
+	uv run python -m smores.models.baselines
 
 clean:
 	rm -rf .pytest_cache .ruff_cache

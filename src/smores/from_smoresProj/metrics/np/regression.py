@@ -1,3 +1,17 @@
+"""Regression metrics, extended from rzv09/smores_proj.
+
+`MARE` is by **Raman Zatsarenko** (github.com/rzv09), from
+`src/metrics/np/regression.py` in rzv09/smores_proj -- where it is the whole module,
+and the metric reported across 32 of that repo's files.
+
+Local changes to his function: the epsilon is applied as `abs(truth) + eps` rather than
+upstream's `abs(truth + eps)`, which is wrong-signed when truth is negative. The two
+agree on the Florida Keys data (O2 ~250 umol/L throughout) but not on SMORES channels
+sitting at a negative pO2 floor.
+
+`assert_mare_safe`, `MAE` and `RMSE` are local additions with no upstream counterpart.
+"""
+
 import numpy as np
 
 def MARE(prediction, truth):
