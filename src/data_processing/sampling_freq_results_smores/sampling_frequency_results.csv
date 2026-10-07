@@ -1,0 +1,13 @@
+freq,freq_label,group_id,n_channels,n_bins,duration_days,median_reads_per_bin,empty_bin_pct,undersampled_bin_pct,residual_iqr,spike_suppression_ratio,signal_retention_r,diurnal_power_frac,tidal_power_frac,nyquist_period_h,event_survival_pct,n_events_1min,composite_score
+1min,1min,biscayne_bay::midwater,3,1070,0.7424,3.0000,0.0000,0.0935,0.0000,,1.0000,,382.2390,0.0333,16.6667,12,0.8437
+2min,2min,biscayne_bay::midwater,3,536,0.7431,7.0000,0.0000,0.1866,0.0337,,0.9961,,192.3234,0.0667,41.6667,12,0.8785
+5min,5min,biscayne_bay::midwater,3,215,0.7431,18.0000,0.0000,0.0000,0.0824,,0.9780,,70.5006,0.1667,33.3333,12,0.8063
+10min,10min,biscayne_bay::midwater,3,108,0.7431,35.0000,0.0000,0.0000,0.0113,,0.9522,,34.3019,0.3333,25.0000,12,0.7099
+15min,15min,biscayne_bay::midwater,3,72,0.7396,51.5000,0.0000,0.0000,0.0000,,0.9278,,23.4161,0.5000,0.0000,12,0.5868
+60min,1hour,biscayne_bay::midwater,3,18,0.7083,207.0000,0.0000,0.0000,0.4244,,0.7707,,,,0.0000,12,0.3333
+1min,1min,biscayne_bay::lower,2,1071,0.7431,2.0000,0.0000,69.6545,0.0094,1.0000,1.0000,,81.7188,0.0333,50.0000,2,0.7250
+2min,2min,biscayne_bay::lower,2,536,0.7431,5.0000,0.0000,0.1866,0.0060,1.5602,0.9959,,41.2410,0.0667,50.0000,2,0.7428
+5min,5min,biscayne_bay::lower,2,215,0.7431,12.0000,0.0000,0.0000,0.0036,2.6282,0.8971,,17.6085,0.1667,50.0000,2,0.5564
+10min,10min,biscayne_bay::lower,2,108,0.7431,23.0000,0.0000,0.0000,0.0030,3.1733,0.9569,,9.2143,0.3333,50.0000,2,0.7259
+15min,15min,biscayne_bay::lower,2,72,0.7396,35.0000,0.0000,0.0000,0.0040,2.3768,0.8486,,5.0513,0.5000,0.0000,2,0.4688
+60min,1hour,biscayne_bay::lower,2,18,0.7083,138.0000,0.0000,0.0000,0.0000,,0.9441,,,,0.0000,2,0.5172
