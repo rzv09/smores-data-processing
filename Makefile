@@ -1,4 +1,4 @@
-.PHONY: setup test lint format data baselines clean
+.PHONY: setup test lint format data resample baselines clean
 
 setup:
 	uv sync
@@ -15,6 +15,12 @@ format:
 
 data:
 	uv run python -m smores.data.florida_keys
+
+# FREQ accepts several intervals: mingw32-make resample FREQ="2min 5min"
+FREQ ?= 2min
+
+resample:
+	uv run python -m smores.data.resample --freq $(FREQ)
 
 baselines:
 	uv run python -m smores.models.baselines
