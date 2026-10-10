@@ -23,6 +23,8 @@ data/**
 !data/**/
 !data/**/.gitkeep
 !data/**/*.md
+!data/**/*.png
+!data/*.png
 models/**
 !models/**/
 !models/**/.gitkeep
