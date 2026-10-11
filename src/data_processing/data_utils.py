@@ -1,5 +1,9 @@
 """
 Shared utilities for processing TS data
+
+Author: Raman Zatsarenko (github.com/rzv09).
+Vendored verbatim from rzv09/smores_proj, `src/data_processing/data_utils.py`.
+Retained here unmodified for reference; edit upstream rather than here.
 """
 
 import numpy as np

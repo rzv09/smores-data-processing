@@ -1,3 +1,8 @@
+"""Author: Raman Zatsarenko (github.com/rzv09).
+Vendored verbatim from rzv09/smores_proj, `src/experiments/single_step/cross_region_forgetting.py`.
+Retained here for reference; edit upstream rather than here.
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
