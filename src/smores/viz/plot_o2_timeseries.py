@@ -19,14 +19,19 @@ point labelled 13:00 at the centre of 13:00-14:00, a 30 minute lead.
 
 Oxygen
 ------
-Only `do_mgl` is plotted. `do_sat` is not a second measurement: per
+`--column` selects which column is drawn; `do_mgl` (default) and `do_sat` are
+both understood. Plotting both as separate curves would be misleading: per
 `smores.data.units`, both are linear in the raw umol/L reading with zero
-intercept, so the two curves differ by a constant factor alone. Saturation is
-kept as a secondary axis on the right -- a unit mirror of one quantity, not a
-second scale.
+intercept, so the two differ by a constant factor alone and the curves would be
+identical in shape. Whichever is *not* plotted is therefore shown as a secondary
+axis on the right -- a unit mirror of one quantity, not a second scale. The
+choice of column only changes which unit gets the ticks the eye reads first.
+
+Any other numeric column may be passed too; it is plotted without a mirror axis.
 
 Usage:
     python -m smores.viz.plot_o2_timeseries data/processed/florida_keys_o2_2min.parquet
+    python -m smores.viz.plot_o2_timeseries <parquet> --column do_sat
     python -m smores.viz.plot_o2_timeseries <parquet> --out fig.png --dark
 """
 
@@ -78,10 +83,42 @@ THEME_DARK = {
 }
 
 VALUE_COLUMN = "do_mgl"
-Y_LABEL = "Dissolved oxygen (mg/L)"
 
 # do_mgl -> % air saturation, from units.mgl_from_saturation inverted.
 MGL_PER_PERCENT = O2SOL_SITE_UMOL_L * O2_MG_PER_UMOL / 100.0
+
+# Per-column presentation. `mirror_per_unit` is how many of this column's units
+# make up one unit of the mirror axis, so the secondary axis is value /
+# mirror_per_unit; `mirror_tick` is the spacing of its ticks in mirror units.
+# Since do_mgl and do_sat are the same measurement in different units, each is
+# the other's mirror -- see the module docstring.
+COLUMN_SPECS = {
+    "do_mgl": {
+        "label": "Dissolved oxygen (mg/L)",
+        "unit": "mg/L",
+        "decimals": 2,
+        "mirror_label": "% air saturation",
+        "mirror_per_unit": MGL_PER_PERCENT,
+        "mirror_tick": 5,
+        "mirror_decimals": 0,
+    },
+    "do_sat": {
+        "label": "Dissolved oxygen (% air saturation)",
+        "unit": "%",
+        "decimals": 1,
+        "mirror_label": "mg/L",
+        "mirror_per_unit": 1.0 / MGL_PER_PERCENT,
+        "mirror_tick": 0.25,
+        "mirror_decimals": 2,
+    },
+}
+
+
+def column_spec(value_col: str) -> dict:
+    """Presentation for `value_col`, falling back to a bare unitless spec."""
+    if value_col in COLUMN_SPECS:
+        return COLUMN_SPECS[value_col]
+    return {"label": value_col, "unit": "", "decimals": 3, "mirror_label": None}
 
 
 def load_panels(path: Path, value_col: str = VALUE_COLUMN):
@@ -99,7 +136,13 @@ def load_panels(path: Path, value_col: str = VALUE_COLUMN):
         wide = group.pivot_table(
             index="timestamp", columns="sensor_id", values=value_col, observed=True
         ).sort_index()
-        panels.append((name, wide))
+        # pivot_table drops all-NaN rows, so a column the pipeline never filled
+        # arrives here as an empty frame. Skipping it keeps the failure legible
+        # rather than an IndexError off index[0] further down.
+        if not wide.empty:
+            panels.append((name, wide))
+    if not panels:
+        raise ValueError(f"{value_col!r} has no non-null values in {path}")
     panels.sort(key=lambda item: item[1].index[0])
     return panels
 
@@ -131,9 +174,10 @@ def shade_night(ax, start, end, theme):
         )
 
 
-def annotate_extremes(ax, wide, theme):
+def annotate_extremes(ax, wide, theme, spec):
     """Mark the panel's min and max with their exact local time and value."""
     centre = wide.mean(axis=1)
+    unit = f" {spec['unit']}" if spec["unit"] else ""
     for which, when in (("max", centre.idxmax()), ("min", centre.idxmin())):
         value = centre.loc[when]
         above = which == "max"
@@ -142,7 +186,7 @@ def annotate_extremes(ax, wide, theme):
             mec=theme["muted"], mew=1.0, zorder=5,
         )
         ax.annotate(
-            f"{value:.2f} mg/L\n{when:%b %d %H:%M}",
+            f"{value:.{spec['decimals']}f}{unit}\n{when:%b %d %H:%M}",
             xy=(when, value),
             xytext=(0, 16 if above else -28),
             textcoords="offset points",
@@ -177,9 +221,13 @@ def label_right(ax, wide, colors, min_gap_frac: float = 0.06):
         )
 
 
-def print_extrema(panels):
+def print_extrema(panels, spec):
     """Per-deployment extrema with exact local timestamps, and sensor spread."""
-    header = f"{'deployment':<20} {'min (mg/L)':>22} {'max (mg/L)':>22} {'range':>7} {'spread':>7}"
+    unit = f" ({spec['unit']})" if spec["unit"] else ""
+    header = (
+        f"{'deployment':<20} {'min' + unit:>22} {'max' + unit:>22} "
+        f"{'range':>7} {'spread':>7}"
+    )
     print(header)
     print("-" * len(header))
     for name, wide in panels:
@@ -198,6 +246,7 @@ def print_extrema(panels):
 def plot(path: Path, out: Path, dark: bool = False, value_col: str = VALUE_COLUMN):
     theme = THEME_DARK if dark else THEME_LIGHT
     colors = theme["series"]
+    spec = column_spec(value_col)
     panels = load_panels(path, value_col)
 
     # One hour is the same width in every panel; without this the shortest
@@ -262,11 +311,11 @@ def plot(path: Path, out: Path, dark: bool = False, value_col: str = VALUE_COLUM
             dates = f"{start:%b} {start.day} – {end:%b} {end.day}"
         ax.set_title(f"{name}\n{dates}", color=theme["text"], fontsize=8, loc="left", pad=8)
 
-        annotate_extremes(ax, wide, theme)
+        annotate_extremes(ax, wide, theme, spec)
         label_right(ax, wide, colors)
 
         if index == 0:
-            ax.set_ylabel(Y_LABEL, color=theme["text"], fontsize=9)
+            ax.set_ylabel(spec["label"], color=theme["text"], fontsize=9)
             ax.spines["left"].set_visible(True)
             ax.spines["left"].set_color(theme["grid"])
             # Upper left: the lower left is where the night label sits, and the
@@ -275,18 +324,23 @@ def plot(path: Path, out: Path, dark: bool = False, value_col: str = VALUE_COLUM
                       labelcolor=theme["muted"], columnspacing=1.0, handlelength=1.4)
 
     # Unit mirror of the same quantity -- not a second measure on a second scale.
-    secondary = axes[-1].secondary_yaxis(
-        "right",
-        functions=(lambda mgl: mgl / MGL_PER_PERCENT, lambda pct: pct * MGL_PER_PERCENT),
-    )
-    secondary.set_ylabel("% air saturation", color=theme["muted"], fontsize=8)
-    secondary.yaxis.set_major_locator(mticker.MultipleLocator(5))
-    secondary.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
-    secondary.tick_params(colors=theme["muted"], labelsize=7)
-    secondary.spines["right"].set_color(theme["grid"])
+    # Skipped for columns with no known second unit.
+    if spec["mirror_label"]:
+        per_unit = spec["mirror_per_unit"]
+        secondary = axes[-1].secondary_yaxis(
+            "right",
+            functions=(lambda v: v / per_unit, lambda m: m * per_unit),
+        )
+        secondary.set_ylabel(spec["mirror_label"], color=theme["muted"], fontsize=8)
+        secondary.yaxis.set_major_locator(mticker.MultipleLocator(spec["mirror_tick"]))
+        secondary.yaxis.set_major_formatter(
+            mticker.FormatStrFormatter(f"%.{spec['mirror_decimals']}f")
+        )
+        secondary.tick_params(colors=theme["muted"], labelsize=7)
+        secondary.spines["right"].set_color(theme["grid"])
 
     fig.suptitle(
-        f"{path.stem} — dissolved oxygen by sensor, shaded {NIGHT_START}:00–"
+        f"{path.stem} — {spec['label'].lower()} by sensor, shaded {NIGHT_START}:00–"
         f"{NIGHT_END:02d}:00 local",
         color=theme["text"], fontsize=11, x=0.01, ha="left",
     )
@@ -295,7 +349,7 @@ def plot(path: Path, out: Path, dark: bool = False, value_col: str = VALUE_COLUM
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=200, facecolor=theme["surface"])
     print(f"wrote {out}\n")
-    print_extrema(panels)
+    print_extrema(panels, spec)
     return fig
 
 
@@ -303,11 +357,19 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("parquet", type=Path)
     p.add_argument("--out", type=Path, default=None)
-    p.add_argument("--column", default=VALUE_COLUMN, help="value column to plot")
+    p.add_argument(
+        "--column",
+        default=VALUE_COLUMN,
+        help=f"value column to plot; {' or '.join(COLUMN_SPECS)} carry units (default: %(default)s)",
+    )
     p.add_argument("--dark", action="store_true")
     args = p.parse_args()
 
-    out = args.out or Path("data/processed/figures") / f"{args.parquet.stem}.png"
+    # Suffix the non-default column so a do_sat run does not overwrite the do_mgl figure.
+    stem = args.parquet.stem
+    if args.column != VALUE_COLUMN:
+        stem = f"{stem}_{args.column}"
+    out = args.out or Path("data/processed/figures") / f"{stem}.png"
     plot(args.parquet, out, dark=args.dark, value_col=args.column)
 
 
