@@ -78,13 +78,20 @@ those velocities with the oxygen signal, so flux work must go back to the raw CS
 stays immutable in `data/raw/`. `P` survives only as `depth_m`. The height of the ADV
 above the seabed (0.35 m, `HEIGHT_ABOVE_BED_M`) is not part of the shared schema; it is
 recorded here as a constant for context on `depth_m` rather than as an output column.
+
+2-minute grid
+-------------
+`pipeline` bins the 8 Hz output onto the shared 2-minute grid (`smores.data.resample`).
+A full bin holds 960 readings per sensor; bins under half full -- the partial bins at
+each deployment's edges -- are dropped rather than let a few samples stand in for two
+minutes.
 """
 
 import numpy as np
 import pandas as pd
 
 from smores import config
-from smores.data import schema
+from smores.data import integrity, resample, schema
 from smores.data.units import (
     DENSITY_FRESH_KG_M3,
     mgl_from_saturation,
@@ -121,6 +128,11 @@ O2SOL_FRESH_UMOL_L = float(
 DO_NATIVE_UNIT = "umol/L"
 
 SAMPLE_INTERVAL_S = 0.125
+READS_PER_BIN = int(schema.SAMPLE_INTERVAL.total_seconds() / SAMPLE_INTERVAL_S)
+MIN_READS_PER_BIN = READS_PER_BIN // 2
+# The three optodes are replicates in one measuring volume; raw inter-sensor
+# correlation is 0.985-0.990.
+MIN_REPLICATE_CORRELATION = 0.95
 SENSOR_MAP = {"O2_S1": "FL1", "O2_S2": "FL2", "O2_S3": "FL3"}
 # Ordered categorical used only internally, to keep sort order stable; the schema
 # requires `sensor_id` to come out as plain str.
@@ -229,6 +241,35 @@ def build(write=True, path=None, out_path=None):
         destination.parent.mkdir(parents=True, exist_ok=True)
         out.to_parquet(destination, compression="snappy", index=False)
     return out
+
+
+def site_checks(grid):
+    """Checks only this site's instruments can confirm."""
+    wide = grid.pivot(index="timestamp", columns="sensor_id", values=schema.PRIMARY_SIGNAL)
+    corr = wide.corr()
+    pairs = [(a, b) for i, a in enumerate(corr.columns) for b in corr.columns[i + 1:]]
+    lowest = min(corr.loc[a, b] for a, b in pairs) if pairs else np.nan
+    full = float((grid["n_obs"] == READS_PER_BIN).mean())
+    return [
+        integrity.Check(
+            "replicates_agree", bool(lowest >= MIN_REPLICATE_CORRELATION),
+            f"lowest inter-sensor {schema.PRIMARY_SIGNAL} correlation {lowest:.4f} "
+            f"(need >= {MIN_REPLICATE_CORRELATION})",
+        ),
+        integrity.Check(
+            "bins_full", full > 0.99,
+            f"{full:.2%} of bins hold all {READS_PER_BIN} readings",
+        ),
+        integrity.diel_check(grid, SOURCE_TZ),
+    ]
+
+
+def pipeline(path=None, verbose=True):
+    """Raw CSV -> 2-minute grid (with `n_obs`) and this site's integrity checks."""
+    if verbose:
+        print("[florida_keys] reading raw CSV")
+    grid = resample.to_grid(to_schema(load_raw(path)), min_obs=MIN_READS_PER_BIN)
+    return grid, site_checks(grid)
 
 
 def main():
