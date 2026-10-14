@@ -22,8 +22,16 @@ Copy `.env.example` to `.env` for any secrets or machine-specific settings.
 | `uv run ruff check .` | Lint |
 | `uv run ruff format .` | Format |
 | `uv run jupyter lab` | Start JupyterLab |
+| `uv run python -m smores.data.florida_keys` | Build the harmonized parquet from the raw CSV |
+| `uv run python -m smores.data.resample --freq 2min` | Write a fixed-interval binned copy of it |
 
-The `Makefile` wraps these as `setup`, `test`, `lint`, `format`, and `clean`. On this
+`resample` takes any pandas offset alias, several at once (`--freq 2min 5min`), and any
+harmonized parquet (`--source`); it infers the source's own sampling rate and refuses a
+target finer than that. 2 min is the default because `test_sampling_frequency.py` scored
+it best on Florida Keys — another dataset deserves its own benchmark run.
+
+The `Makefile` wraps these as `setup`, `test`, `lint`, `format`, `data`, `resample`
+(`FREQ="2min 5min"`), `baselines`, and `clean`. On this
 machine the binary is `mingw32-make` (from `C:\mingw64\bin`), not `make` — so
 `mingw32-make test`, etc. The `uv run` commands above work regardless.
 

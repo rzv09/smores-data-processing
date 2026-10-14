@@ -88,7 +88,11 @@ MEAN3 = "mean3"
 
 OUT_DIR = config.DATA_DIR / "baselines"
 
-# Categorical slots 1-5 of the validated reference palette, in fixed order.
+# Categorical slots 1-8 of the validated reference palette, in fixed order. Eight is
+# the full set: it clears every gate on the *adjacent* pairlist, which is the one that
+# applies to the line and bar figures below. Any all-pairs form (scatter, small
+# multiples) is capped at the first three slots and must carry identity some other way
+# -- see smores.viz.plot_baseline_comparison, which labels the axis instead.
 PALETTE = {
     "persistence": "#2a78d6",
     "drift": "#eb6834",
@@ -96,6 +100,8 @@ PALETTE = {
     "persist_clim": "#eda100",
     "ridge_ar": "#e87ba4",
     "seasonal_naive": "#008300",
+    "window_average": "#4a3aa7",
+    "historic_average": "#e34948",
 }
 INK = "#0b0b0b"
 MUTED = "#898781"
@@ -290,6 +296,16 @@ def predict_series(model, frame, steps, profile, input_col, target_col):
         # gap. Evaluated anyway so the gap is measured rather than assumed.
         season = _season_steps(frame)
         pred = x.shift(season) if season and season < len(x) else x * np.nan
+    elif model == "window_average":
+        # Trailing mean over the same lookback drift and ridge_ar use, so the
+        # comparison between the three is about functional form rather than how
+        # much history each one happens to see.
+        pred = x.rolling(AR_WINDOW, min_periods=AR_WINDOW).mean().shift(steps)
+    elif model == "historic_average":
+        # Expanding mean of everything observed by the forecast origin. This is
+        # `climatology` with its hour-of-day anomaly removed, so the pair isolates
+        # exactly what the diel correction is worth.
+        pred = x.expanding(min_periods=1).mean().shift(steps)
     elif model == "drift":
         slope_per_step = (x - x.shift(AR_WINDOW)) / AR_WINDOW
         pred = origin + steps * slope_per_step.shift(steps)
@@ -362,8 +378,8 @@ def fit_ridge(train_frames, steps, profile, input_col, target_col):
 # Evaluation
 # ---------------------------------------------------------------------------
 
-MODELS = ("persistence", "seasonal_naive", "drift", "climatology", "persist_clim",
-          "ridge_ar")
+MODELS = ("persistence", "seasonal_naive", "window_average", "historic_average",
+          "drift", "climatology", "persist_clim", "ridge_ar")
 
 
 def evaluate(frames, freq, horizons_min=HORIZONS_MIN, input_col=MEAN3, target_col=MEAN3):

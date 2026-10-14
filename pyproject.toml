@@ -11,6 +11,8 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "python-dotenv",
+    "utilsforecast>=0.2.17",
+    "statsforecast>=2.0.1",
 ]
 
 [dependency-groups]
