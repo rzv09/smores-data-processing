@@ -49,6 +49,7 @@ import argparse
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -467,6 +468,89 @@ def pool(per_fold):
     return pooled.sort_values(["freq", "horizon_min", "rmse"]).reset_index(drop=True)
 
 
+SPLIT_FRACTION = 0.8
+
+
+def split_frames(frames, fraction=SPLIT_FRACTION):
+    """Chronological per-deployment split: first `fraction` trains, the rest tests.
+
+    Returned as `(train_frames, test_index)` where `test_index` maps each deployment to
+    the timestamps that belong to its test block. The *frames* are never truncated for
+    prediction -- see `evaluate_split` for why.
+    """
+    train, test_index = {}, {}
+    for name, frame in frames.items():
+        cut = int(round(len(frame) * fraction))
+        # Need something on both sides, and enough history to build a lag design.
+        if cut <= AR_WINDOW or cut >= len(frame):
+            continue
+        train[name] = frame.iloc[:cut]
+        test_index[name] = frame.index[cut:]
+    return train, test_index
+
+
+def evaluate_split(frames, freq, horizons_min=HORIZONS_MIN, input_col=MEAN3,
+                   target_col=MEAN3, fraction=SPLIT_FRACTION):
+    """Per-deployment 80/20 chronological split, scored with the same metrics as `evaluate`.
+
+    The complement to leave-one-deployment-out, which answers a different question. LODO
+    asks "does this model transfer to a deployment it has never seen?"; the split asks
+    "given this deployment's own first 80%, can the model forecast its last 20%?" A model
+    that wins under both is not winning on an artifact of either.
+
+    The hour-of-day climatology and the ridge are fit on the *pooled* training blocks of
+    every deployment, not one deployment at a time. That is what keeps
+    `MIN_HOUR_DEPLOYMENTS` satisfiable: a single deployment can never supply two distinct
+    pieces for an hour, so a per-deployment fit would silently zero the whole profile.
+
+    Prediction runs over each deployment's full frame and is then masked to the test
+    block. Truncating to the test block first would strip the lag history off its leading
+    rows and throw away the first `steps + AR_WINDOW` samples -- history from before the
+    split is genuinely available at forecast time, so using it is correct, not leakage.
+    """
+    step_min = pd.Timedelta(freq).total_seconds() / 60
+    train, test_index = split_frames(frames, fraction)
+    if not train:
+        return pd.DataFrame()
+
+    train_list = list(train.values())
+    rows = []
+    for horizon in horizons_min:
+        steps = int(round(horizon / step_min))
+        if steps < 1:
+            continue
+        profile = fit_hour_climatology(train_list, input_col)
+        fit_ridge(train_list, steps, profile, input_col, target_col)
+        for name, frame in frames.items():
+            if name not in test_index:
+                continue
+            for model in MODELS:
+                y_true, y_pred = predict_series(model, frame, steps, profile,
+                                                input_col, target_col)
+                keep = y_true.index.isin(test_index[name])
+                y_true, y_pred = y_true[keep], y_pred[keep]
+                if len(y_true) == 0:
+                    continue
+                err = y_pred.to_numpy() - y_true.to_numpy()
+                rows.append(
+                    {
+                        "freq": freq,
+                        "horizon_min": horizon,
+                        "steps": steps,
+                        "fold": name,
+                        "model": model,
+                        "input": input_col,
+                        "target": target_col,
+                        "n": len(err),
+                        "rmse": float(np.sqrt(np.mean(err**2))),
+                        "mae": float(np.mean(np.abs(err))),
+                        "mare": mare(y_pred.to_numpy(), y_true.to_numpy()),
+                    }
+                )
+        _RIDGE_CACHE.clear()
+    return pd.DataFrame(rows)
+
+
 def optode_arms(frames, freq):
     """Single-optode input vs three-sensor-mean input, predicting the SAME target.
 
@@ -498,6 +582,37 @@ def _style(ax):
     for side in ("left", "bottom"):
         ax.spines[side].set_color("#c3c2b7")
     ax.tick_params(colors=MUTED, labelsize=9)
+
+
+def _date_range_label(start, end):
+    """`Jul 12-13`, or `Jul 31 - Aug 1` across a month boundary.
+
+    %-d is a glibc extension and raises on Windows, so the leading zero is stripped by
+    hand rather than by a format code.
+    """
+    if start.date() == end.date():
+        return f"{start:%b} {start.day}"
+    if start.month == end.month:
+        return f"{start:%b} {start.day}–{end.day}"
+    return f"{start:%b} {start.day} – {end:%b} {end.day}"
+
+
+def _timestamp_axis(ax, start, end, target_ticks=6):
+    """Date-and-time ticks, spaced so a panel gets roughly `target_ticks` of them.
+
+    Panels here span 14-20 h and sit side by side at different widths, so a fixed
+    interval either crowds the narrow panels or leaves the wide ones bare. The month-day
+    is kept on every label because the record crosses midnight repeatedly and an
+    `HH:MM`-only axis makes 02:00 on the 13th indistinguishable from 02:00 on the 16th.
+    """
+    hours = max(1, int(round((end - start).total_seconds() / 3600 / target_ticks)))
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=hours))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+    for label in ax.get_xticklabels():
+        label.set_rotation(45)
+        label.set_horizontalalignment("right")
+        label.set_fontsize(7)
     return ax
 
 
@@ -547,33 +662,65 @@ def fig_skill_vs_horizon(pooled, path):
 
 
 def fig_trace(frames, freq, pooled, path):
-    """Predicted vs actual for the best model at 30 min on one held-out deployment."""
+    """Predicted vs actual at 30 min, every deployment, each one held out in turn.
+
+    One panel per deployment, widths proportional to duration so an hour reads the same
+    everywhere. Each panel is a genuine held-out forecast: the climatology and the ridge
+    behind it are fit on the other three deployments only, refit per panel. Drawing all
+    four is what makes the figure representative -- a single panel shows one week-night
+    and invites conclusions the other three would not support.
+    """
     sub = pooled[(pooled["freq"] == freq) & (pooled["horizon_min"] == 30)
                  & (pooled["input"] == MEAN3) & (pooled["model"] != "persistence")]
     if sub.empty:
         return
     best = sub.sort_values("rmse")["model"].iloc[0]
-    held_out = sorted(frames)[0]
-    train = [f for name, f in frames.items() if name != held_out]
-    test = frames[held_out]
     steps = int(round(30 / (pd.Timedelta(freq).total_seconds() / 60)))
-    profile = fit_hour_climatology(train, MEAN3)
-    fit_ridge(train, steps, profile, MEAN3, MEAN3)
+    order = sorted(frames, key=lambda name: frames[name].index[0])
 
-    fig, ax = plt.subplots(figsize=(10, 4.2))
-    _style(ax)
-    ax.plot(test.index, test[MEAN3], linewidth=2, color=INK, label="observed", zorder=4)
-    for model in ("persistence", best):
-        _, y_pred = predict_series(model, test, steps, profile, MEAN3, MEAN3)
-        ax.plot(y_pred.index, y_pred.to_numpy(), linewidth=2, color=PALETTE[model],
-                label=f"{model} (+30 min)", alpha=0.9, zorder=3)
-    _RIDGE_CACHE.clear()
-    ax.set_xlabel("UTC", fontsize=9, color=MUTED)
-    ax.set_title(f"30-minute forecast, held-out deployment {held_out} ({freq} bins)",
-                 fontsize=11, color=INK, loc="left")
-    ax.set_ylabel("O2 (umol/L)", fontsize=9, color=MUTED)
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
+    spans = [(frames[n].index[-1] - frames[n].index[0]).total_seconds() for n in order]
+    fig, axes = plt.subplots(
+        1, len(order), figsize=(16, 4.4), sharey=True,
+        gridspec_kw={"width_ratios": spans, "wspace": 0.04},
+        constrained_layout=True,
+    )
+    axes = [axes] if len(order) == 1 else list(axes)
+    fig.patch.set_facecolor(SURFACE)
+
+    for index, (ax, held_out) in enumerate(zip(axes, order)):
+        train = [f for name, f in frames.items() if name != held_out]
+        test = frames[held_out]
+        profile = fit_hour_climatology(train, MEAN3)
+        fit_ridge(train, steps, profile, MEAN3, MEAN3)
+
+        _style(ax)
+        ax.plot(test.index, test[MEAN3], linewidth=1.8, color=INK, zorder=4,
+                label="observed" if index == 0 else None)
+        for model in ("persistence", best):
+            _, y_pred = predict_series(model, test, steps, profile, MEAN3, MEAN3)
+            ax.plot(y_pred.index, y_pred.to_numpy(), linewidth=1.3,
+                    color=PALETTE[model], alpha=0.9, zorder=3,
+                    label=f"{model} (+30 min)" if index == 0 else None)
+        _RIDGE_CACHE.clear()
+
+        start, end = test.index[0], test.index[-1]
+        ax.set_xlim(start, end)
+        _timestamp_axis(ax, start, end)
+        ax.set_title(f"{held_out}\n{_date_range_label(start, end)}",
+                     fontsize=8, color=INK, loc="left", pad=6)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+
+    axes[0].set_ylabel("O2 (umol/L)", fontsize=9, color=MUTED)
+    axes[0].spines["left"].set_visible(True)
+    axes[0].spines["left"].set_color(GRID)
+    axes[0].legend(frameon=False, fontsize=7, loc="lower left", labelcolor=MUTED)
+
+    fig.suptitle(
+        f"30-minute forecast, every deployment held out in turn ({freq} bins)",
+        fontsize=11, color=INK, x=0.01, ha="left",
+    )
+    fig.supxlabel("UTC", fontsize=9, color=MUTED)
     fig.savefig(path, dpi=160, facecolor=SURFACE)
     plt.close(fig)
 
@@ -584,10 +731,15 @@ def fig_per_fold(per_fold, freq, path):
     if sub.empty:
         return
     folds = sorted(sub["fold"].unique())
-    fig, ax = plt.subplots(figsize=(9, 4.2))
+    # A model with no valid samples anywhere (seasonal_naive here) would otherwise take
+    # a bar slot and a legend entry while drawing nothing, shrinking every real bar.
+    drawn = [m for m in MODELS if sub[sub["model"] == m]["rmse"].notna().any()]
+    if not drawn:
+        return
+    fig, ax = plt.subplots(figsize=(9, 4.6))
     _style(ax)
-    width = 0.8 / len(MODELS)
-    for i, model in enumerate(MODELS):
+    width = 0.8 / len(drawn)
+    for i, model in enumerate(drawn):
         vals = [
             sub[(sub["fold"] == f) & (sub["model"] == model)]["rmse"].mean() for f in folds
         ]
@@ -599,7 +751,9 @@ def fig_per_fold(per_fold, freq, path):
     ax.set_ylabel("RMSE (umol/L), 30 min", fontsize=9, color=MUTED)
     ax.set_title(f"Per-fold RMSE at 30 min ({freq} bins) — fold spread exposes unstable models",
                  fontsize=11, color=INK, loc="left")
-    ax.legend(frameon=False, fontsize=8, ncol=len(MODELS))
+    # Wrapped to four columns: one row per model was fine at six models but runs off
+    # the figure at eight.
+    ax.legend(frameon=False, fontsize=8, ncol=4, loc="upper left")
     fig.tight_layout()
     fig.savefig(path, dpi=160, facecolor=SURFACE)
     plt.close(fig)
@@ -687,7 +841,7 @@ def run(freqs=FREQS, path=None, out_dir=OUT_DIR, make_figures=True):
     out_dir = out_dir
     (out_dir / "figures").mkdir(parents=True, exist_ok=True)
 
-    per_fold_all, pooled_all, floors = [], [], {}
+    per_fold_all, pooled_all, split_all, floors = [], [], [], {}
     for freq in freqs:
         frames = load_wide(path, freq)
         if not frames:
@@ -697,6 +851,12 @@ def run(freqs=FREQS, path=None, out_dir=OUT_DIR, make_figures=True):
         per_fold_all.append(per_fold)
         pooled = pool(per_fold)
         pooled_all.append(pooled)
+
+        # The second protocol, pooled on its own so skill is always measured against
+        # the persistence run under the *same* split.
+        split_pooled = pool(evaluate_split(frames, freq))
+        if not split_pooled.empty:
+            split_all.append(split_pooled)
         if make_figures:
             figs = out_dir / "figures"
             fig_trace(frames, freq, pooled, figs / f"trace_{freq}.png")
@@ -710,6 +870,9 @@ def run(freqs=FREQS, path=None, out_dir=OUT_DIR, make_figures=True):
         fig_skill_vs_horizon(pooled, out_dir / "figures" / "skill_vs_horizon.png")
     per_fold.to_csv(out_dir / "results_per_fold.csv", index=False)
     pooled.to_csv(out_dir / "results.csv", index=False)
+    if split_all:
+        split = pd.concat(split_all, ignore_index=True)
+        split.to_csv(out_dir / "results_split80.csv", index=False)
     return per_fold, pooled, floors
 
 

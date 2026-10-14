@@ -132,6 +132,88 @@ def figure(pooled, freq, metric, out):
     print(f"wrote {out}")
 
 
+def protocol_figure(pooled, split, freq, metric, out):
+    """The same models under both protocols, side by side.
+
+    The two answer different questions -- leave-one-deployment-out asks whether a model
+    transfers to a deployment it has never seen, the 80/20 split asks whether it can
+    forecast the tail of a deployment it has already learned from. A model that wins
+    under both is not winning on an artifact of either, which is the only claim this
+    figure is making.
+
+    Bars are grouped per model rather than ranked separately per protocol, because the
+    comparison of interest runs across the pair, not down either column.
+    """
+    # Skill, not absolute error. The two protocols score different rows -- the 80/20 test
+    # blocks are the tail ends of deployments, which are flatter than the record as a
+    # whole, so every model's RMSE drops under the split for reasons that have nothing to
+    # do with the model. Skill is measured against the persistence run under the *same*
+    # protocol, which is the only quantity that survives the comparison.
+    metric = "skill_vs_persistence"
+    label = "skill vs persistence  (1 - RMSE/RMSE_persist)"
+    long_name = "forecast skill"
+    def fmt(v):
+        return f"{v:+.0%}"
+
+    arms = []
+    for name, frame in (("leave-one-deployment-out", pooled), ("80/20 split", split)):
+        sub = frame[(frame["freq"] == freq) & (frame["horizon_min"] == 30)
+                    & (frame["input"] == baselines.MEAN3)]
+        if sub.empty:
+            return
+        arms.append((name, sub.set_index("model")[metric]))
+
+    order = arms[0][1].sort_values(ascending=False).index.tolist()
+    for name in baselines.MODELS:
+        if name not in order:
+            order.append(name)
+    y = np.arange(len(order))
+    height = 0.8 / len(arms)
+
+    fig, ax = plt.subplots(figsize=(9, 5.0), facecolor=SURFACE)
+    for i, (name, values) in enumerate(arms):
+        offset = (i - (len(arms) - 1) / 2) * height
+        shades = [BAR, "#8fb9ea"][i]
+        ax.barh(y + offset, values.reindex(order).to_numpy(), height * 0.88,
+                color=shades, label=name, zorder=3)
+
+    for i, (_, values) in enumerate(arms):
+        offset = (i - (len(arms) - 1) / 2) * height
+        for yi, value in zip(y, values.reindex(order).to_numpy()):
+            if np.isfinite(value):
+                right = value >= 0
+                ax.annotate(fmt(value), xy=(value, yi + offset),
+                            xytext=(3 if right else -3, 0),
+                            textcoords="offset points", va="center",
+                            ha="left" if right else "right",
+                            fontsize=6.5, color=MUTED)
+
+    ax.axvline(0, color=MUTED, lw=1.0, zorder=4)
+    ax.set_yticks(y)
+    ax.set_yticklabels(order, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_facecolor(SURFACE)
+    ax.grid(True, axis="x", color=GRID, lw=0.8, zorder=1)
+    ax.set_axisbelow(True)
+    ax.tick_params(colors=MUTED, labelsize=8)
+    ax.set_xlabel(label, fontsize=9, color=MUTED)
+    ax.legend(frameon=False, fontsize=8, labelcolor=MUTED, loc="upper left")
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+
+    fig.suptitle(
+        f"Baseline {long_name} at h = 30 min on {freq} bins — right of the line beats "
+        "persistence under that protocol",
+        fontsize=11, color=INK, x=0.01, ha="left",
+    )
+    fig.tight_layout()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor=SURFACE)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--freq", default="2min")
@@ -142,10 +224,14 @@ def main():
     frames = baselines.load_wide(freq=args.freq)
     per_fold = baselines.optode_arms(frames, args.freq)
     pooled = baselines.pool(per_fold)
+    split = baselines.pool(baselines.evaluate_split(frames, args.freq))
 
     for metric in METRICS:
         figure(pooled, args.freq, metric,
                args.out_dir / f"baseline_comparison_{metric}_{args.freq}.png")
+    if not split.empty:
+        protocol_figure(pooled, split, args.freq, "rmse",
+                        args.out_dir / f"protocol_comparison_skill_{args.freq}.png")
 
     shown = pooled[(pooled["input"] == baselines.MEAN3)
                    & (pooled["horizon_min"] == 30)]
