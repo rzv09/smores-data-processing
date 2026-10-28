@@ -113,6 +113,9 @@ MAX_BORROW_GAP_S = 2 * 3600
 POLL_GAP_S = 5.0  # params within a poll are < 1 s apart; polls are ~52 s apart
 
 MIDWATER_CHANNELS = (2, 3, 25)
+# The optodes that stayed live in situ (data/eda/REPORT.md): midwater ch2, 3, 25,
+# upper-sediment ch7, 26, and ch8. `pipeline` writes them to their own file as well.
+VALID_CHANNELS = (2, 3, 25, 7, 8, 26)
 
 _FILE_RE = re.compile(r"SENS_(?P<prefix>\d+)_(?P<chunk>\d+)_(?P<kind>.+)\.csv")
 

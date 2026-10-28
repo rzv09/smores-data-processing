@@ -16,11 +16,14 @@ Each stage has one job:
    processed file on disk has always passed.
 5. **write** -- `data/processed/<site>_o2_2min.parquet` and, next to it,
    `<site>_o2_2min_integrity.json` with every check result and the coverage table.
+   A site with sensor subsets also gets `<site>_o2_2min_<subset>.parquet` for each,
+   the same rows restricted to that subset's sensors (Biscayne Bay: `valid`, its
+   six live optodes).
 """
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from smores import config
 from smores.data import biscayne_bay, florida_keys, integrity, santa_barbara, schema
@@ -31,6 +34,7 @@ class Site:
     module: object
     raw_path: object
     out_path: object
+    subsets: dict = field(default_factory=dict)  # name -> sensor_ids, each its own file
 
     @property
     def site_id(self):
@@ -44,10 +48,17 @@ class Site:
         return self.raw_path.exists()
 
 
+def subset_path(out_path, name):
+    return out_path.with_name(f"{out_path.stem}_{name}{out_path.suffix}")
+
+
 SITES = {
     "florida_keys": Site(florida_keys, config.FLORIDA_KEYS_CSV, config.FLORIDA_KEYS_2MIN_PARQUET),
     "biscayne_bay": Site(
-        biscayne_bay, config.BISCAYNE_HARVARD_DIR, config.BISCAYNE_BAY_2MIN_PARQUET
+        biscayne_bay,
+        config.BISCAYNE_HARVARD_DIR,
+        config.BISCAYNE_BAY_2MIN_PARQUET,
+        subsets={"valid": [biscayne_bay.sensor_id(c) for c in biscayne_bay.VALID_CHANNELS]},
     ),
     "santa_barbara": Site(
         santa_barbara, config.SANTA_BARBARA_CSV, config.SANTA_BARBARA_2MIN_PARQUET
@@ -73,6 +84,13 @@ def run(site_id, write=True, raw_path=None, out_path=None, verbose=True):
         report.write(destination.with_name(destination.stem + "_integrity.json"))
         if verbose:
             print(f"wrote {len(frame):,} rows to {destination}")
+
+        for name, sensors in site.subsets.items():
+            subset = frame[frame["sensor_id"].isin(sensors)].reset_index(drop=True)
+            path = subset_path(destination, name)
+            schema.validate(subset).to_parquet(path, compression="snappy", index=False)
+            if verbose:
+                print(f"wrote {len(subset):,} rows ({name}: {sorted(sensors)}) to {path}")
     return frame, report
 
 
