@@ -208,6 +208,43 @@ def test_build_round_trips_through_parquet(tmp_path):
     pd.testing.assert_frame_equal(pd.read_parquet(destination), written)
 
 
+def test_two_minute_grid_holds_full_bins_only(tmp_path):
+    csv = tmp_path / "tiny.csv"
+    # Two full 2-minute bins and a 10-reading stub that must be dropped.
+    raw_frame(rows=2 * fk.READS_PER_BIN + 10, t_noise=1e-5).to_csv(csv, index=False)
+    grid, _ = fk.pipeline(csv, verbose=False)
+    assert len(grid) == 2 * 3
+    assert (grid["n_obs"] == fk.READS_PER_BIN).all()
+    assert grid["timestamp"].unique().tolist() == [
+        pd.Timestamp("2017-07-12 18:00", tz="UTC"),
+        pd.Timestamp("2017-07-12 18:02", tz="UTC"),
+    ]
+    schema.validate(grid.drop(columns="n_obs"))
+
+
+def test_replicate_check_catches_a_disagreeing_sensor(tmp_path):
+    csv = tmp_path / "tiny.csv"
+    frame = raw_frame(rows=4 * fk.READS_PER_BIN)
+    ramp = np.linspace(240, 260, len(frame))
+    frame["O2_S1"], frame["O2_S2"], frame["O2_S3"] = ramp, ramp, ramp[::-1]
+    frame.to_csv(csv, index=False)
+    _, checks = fk.pipeline(csv, verbose=False)
+    assert not {c.name: c for c in checks}["replicates_agree"].passed
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not config.FLORIDA_KEYS_CSV.is_file(), reason="Florida Keys raw CSV not present"
+)
+def test_full_dataset_passes_the_two_minute_pipeline():
+    from smores.data import integrity
+
+    grid, checks = fk.pipeline(verbose=False)
+    report = integrity.build_report(grid, fk.SITE_ID, checks)
+    assert report.ok, str(report)
+    assert len(grid) == 3 * 71 * 30  # 71 h of deployments, 30 bins/h, 3 sensors
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(
     not config.FLORIDA_KEYS_CSV.is_file(), reason="Florida Keys raw CSV not present"

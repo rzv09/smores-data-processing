@@ -11,11 +11,13 @@ data/
 ├── raw/                                    immutable inputs — never edited in place
 │   ├── florida_keys/
 │   │   └── florida_keys_data.csv           203 MB · 2,044,805 × 10   [present]
-│   └── biscayne_bay/
-│       └── FULL data from Harvard team/    Harvard drop             [not added yet]
+│   ├── biscayne_bay/
+│   │   └── FULL data from Harvard team/    13,476 chunk CSVs        [present]
 ├── interim/                                intermediate outputs
 ├── processed/                              analysis-ready datasets
-│   └── florida_keys_o2.parquet             62 MB · 6,134,415 × 12   [built]
+│   ├── florida_keys_o2.parquet             62 MB · 6,134,415 × 12   [built, 8 Hz]
+│   ├── <site>_o2_2min.parquet              one per site             [make pipeline]
+│   └── <site>_o2_2min_integrity.json       its integrity report     [make pipeline]
 └── external/                               third-party data
 ```
 
@@ -33,6 +35,8 @@ resolves identically from a notebook, a test, or the CLI.
 | `FLORIDA_KEYS_CSV` | `data/raw/florida_keys/florida_keys_data.csv` |
 | `FLORIDA_KEYS_PARQUET` | `data/processed/florida_keys_o2.parquet` |
 | `BISCAYNE_HARVARD_DIR` | `data/raw/biscayne_bay/FULL data from Harvard team/` |
+| `FLORIDA_KEYS_2MIN_PARQUET` | `data/processed/florida_keys_o2_2min.parquet` |
+| `BISCAYNE_BAY_2MIN_PARQUET` | `data/processed/biscayne_bay_o2_2min.parquet` |
 | `FLORIDA_DIR` | `data/raw/florida_keys/` |
 | `BISCAYNE_DIR` | `data/raw/biscayne_bay/` |
 | `RAW_DIR` | `data/raw/` |
@@ -190,22 +194,56 @@ the 08:00 bin holds only 3 rows, which is enough to produce a spurious trough.
 
 ## Biscayne Bay
 
-Not added yet; arrives later in the project. `BISCAYNE_HARVARD_DIR` is already defined
-and points at where it will live. A `Path` never touches the filesystem, so the missing
-directory breaks no import and no test — when the data lands, drop it at that exact
-path and the constant starts working with no code change.
+`BISCAYNE_HARVARD_DIR` — the SMORES 2026 pier array at the FIU Biscayne Bay campus
+(25.9113, −80.1373), May 13 – June 21, 2026: 13,476 per-chunk CSVs named
+`SENS_<prefix>_<chunk>_<Kind>.csv`. `prefix` is a logger session counter and chunk
+numbers repeat across prefixes, so a chunk is keyed by **(prefix, chunk)**. Every
+file's `timestamp` column is a raw tick counter (~1.003e8 ticks/s), not wall time.
 
-Guard any code written ahead of the data:
+| Kind | Files | Columns (besides `index`, `timestamp`) |
+| --- | --- | --- |
+| `RDO` | 2,304 | `serial_id`, `modbus_id` (channel 2–28), `param`, `value`, `quality`, `units` |
+| `RTC` | 2,386 | `seconds`, `minutes`, `hours`, `wday`, `mday`, `month`, `year`, `timestr` |
+| `External_PTS_Bar100` | 2,289 | `pressure_bar` (gauge), `temperature_c` — 5 Hz |
+| `Internal_PTS` | 2,368 | `pressure_mbar`, `temperature_c` — housing, not water |
+| `IMU` | 1,713 | pitch/roll ×100, accel and gyro X/Y/Z |
+| `Image_Meta` | 2,416 | `file_number`, `resolution` |
 
-```python
-from smores.config import BISCAYNE_HARVARD_DIR
+RDO is long format, four `param` reads per ~52 s poll: 1 temperature (°C, units 1),
+20 mg/L (117), 21 % sat (177), 30 pO2 (**mmHg**, 26). Quality codes 3/5/7 are failing.
 
-if BISCAYNE_HARVARD_DIR.exists():
-    ...
-```
+`smores.data.biscayne_bay` documents every transform. In short: each chunk gets its own
+tick→RTC fit, and RTC-less chunks borrow a tick-continuous neighbour's fit (0.52% of
+reads cannot be placed and are dropped). The RTC is local **EDT**. `do_sat` is
+recomputed from unclipped pO2 with the sensor's own formula, `do_mgl` is
+seawater-referenced (S 35 assumed), `depth_m` is the Bar100 depth on the lander, and the
+pre-deployment bucket test has its own `deployment_id`. Dead channels are masked
+(`qc_flag` 3), not deleted. Only ch2, ch3, ch25, ch7, ch26 and ch8 have good in-situ
+data, matching `data/eda/REPORT.md`.
+## 2-minute pipeline
 
-`tests/test_datasets.py` has a contents check that is skipped until the directory
-exists, then starts running on its own.
+**Primary signal: `do_mgl`** (in-situ mg/L, `schema.PRIMARY_SIGNAL`), required on every
+row; `do_sat` is kept as a secondary column and may be null. Santa Barbara reports mg/L
+directly. Florida Keys and Biscayne Bay derive it from % saturation and seawater
+solubility, so their absolute level carries an assumption: Florida Keys a 29.5 °C
+temperature (±2.7% across 28–31 °C), Biscayne Bay a salinity of 35 (~0.6% per salinity
+unit). Relative structure is unaffected.
+
+`make pipeline` (`python -m smores.data.pipeline [site ...] [--no-write]`) runs each site
+whose raw data is present through five stages:
+
+1. **load + harmonize** — the site module reshapes raw files to the shared schema.
+2. **grid** — `smores.data.resample` median-bins onto the 2-minute grid
+   (`schema.SAMPLE_INTERVAL`). Bins never straddle a sensor or deployment; good readings
+   win over flagged ones in a mixed bin; nothing is interpolated, so Santa Barbara's
+   15-minute data stays sparse rather than upsampled. Florida Keys drops bins under half
+   full (480 of 960 readings).
+3. **verify** — `schema.validate`.
+4. **integrity** — `smores.data.integrity`: unique keys, on-grid timestamps, physical
+   ranges, disjoint deployments, coverage and gaps, plus per-site checks (replicate
+   agreement, clock fit, recomputed vs sensor saturation, diel cycle in local time).
+   Any error stops the run before anything is written.
+5. **write** — `<site>_o2_2min.parquet` plus `<site>_o2_2min_integrity.json`.
 
 ## Conventions
 

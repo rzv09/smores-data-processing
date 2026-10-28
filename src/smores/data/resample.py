@@ -1,5 +1,22 @@
 """Harmonized long timeseries -> fixed-grid resampled dataset.
 
+Two entry points, for two different jobs:
+
+* `to_grid` bins a native-rate frame onto `schema.SAMPLE_INTERVAL`, the one shared
+  2-minute analysis grid. This is what each site's ingest and `smores.data.pipeline`
+  call, so every processed output lands on the same instants. It takes a frame and
+  returns a frame; it knows nothing about paths or parquet.
+* `resample_long` (and the `__main__` CLI behind it) bins to an *arbitrary* `freq`,
+  measures the source's own rate, and reports coverage. This is the exploratory path
+  -- `make resample FREQ="2min 5min"` -- for comparing intervals on one source.
+
+They are deliberately not the same function. The pipeline grid is fixed and its
+quality rule is "best available wins" (see `to_grid`); the exploratory path varies
+the interval and treats QC by exclusion-then-max (see "Output" below). Folding one
+into the other would mean one of those two behaviours silently changing.
+
+The rest of this docstring describes `resample_long` and the CLI.
+
 The Florida Keys record is 8 Hz, which is far finer than any model here needs and
 62 MB of parquet to carry around. This module writes the binned version once, to
 `data/processed/`, so notebooks and model code read a small file instead of
@@ -90,6 +107,10 @@ VALUE_COLUMNS = ("do_sat", "temperature_c", "do_mgl", "do_native_value", "depth_
 
 GROUP_KEYS = ("site_id", "deployment_id", "sensor_id")
 
+# `to_grid` groups by the bin as well, so a bin never straddles a sensor or a
+# deployment.
+GRID_KEYS = (*GROUP_KEYS, "timestamp")
+
 # Constant within a group, carried through unchanged.
 CARRIED_COLUMNS = ("do_native_unit", "data_source")
 
@@ -110,6 +131,54 @@ LEGACY_RENAMES = {
 # The legacy oxygen column spelled its unit in its own name, so the missing
 # `do_native_unit` is recoverable rather than assumed.
 LEGACY_NATIVE_UNITS = {"raw_o2_umol": "umol/L"}
+
+
+def to_grid(df, interval=schema.SAMPLE_INTERVAL, min_obs=1):
+    """Bin a native-rate schema frame onto the shared `interval` grid.
+
+    Every site arrives at its own rate -- Florida Keys at 8 Hz, Biscayne Bay polls
+    every ~52 s, Santa Barbara every 15 min -- and this brings them all to
+    `schema.SAMPLE_INTERVAL` the same way:
+
+    * A bin is labelled by its start: `timestamp.floor(interval)`.
+    * Bins never straddle a sensor or a deployment; the group key is `GRID_KEYS`.
+    * Values are the **median** of the bin's readings, as in the SMORES plan's
+      5-minute medians, so a single spike cannot move a bin.
+    * Best available quality wins: when a bin holds readings of mixed `qc_flag`, only
+      the readings at the lowest (best) flag are aggregated and the bin carries that
+      flag. A bin of good reads with one flagged read is a good bin; a bin of only
+      flagged reads stays flagged. This differs from `resample_long`, which drops
+      flagged reads outright and takes the *max* flag over what remains.
+    * Nothing is interpolated or forward-filled. An empty bin is simply absent, so a
+      site sampled more coarsely than the grid (Santa Barbara) comes out sparse, not
+      upsampled.
+
+    Returns a frame with the schema's columns, in schema order and dtypes, plus an
+    `n_obs` column (readings behind each bin) so the caller can drop under-filled
+    bins and the integrity report can show fill. `n_obs` is not a schema column;
+    `pipeline` strips it before writing. Sorted by timestamp, then sensor.
+    """
+    keys = list(GRID_KEYS)
+    work = df[keys + list(VALUE_COLUMNS) + list(CARRIED_COLUMNS) + ["qc_flag"]].copy()
+    work["timestamp"] = work["timestamp"].dt.floor(interval)
+
+    best = work.groupby(keys, observed=True, sort=False)["qc_flag"].transform("min")
+    work = work[work["qc_flag"] == best]
+
+    grouped = work.groupby(keys, observed=True, sort=False)
+    out = grouped[list(VALUE_COLUMNS)].median()
+    out["qc_flag"] = grouped["qc_flag"].first()
+    for name in CARRIED_COLUMNS:
+        out[name] = grouped[name].first()
+    out[COUNT_COLUMN] = grouped.size()
+    out = out.reset_index()
+
+    out = out[out[COUNT_COLUMN] >= min_obs]
+    out = out.sort_values(["timestamp", "sensor_id"], kind="stable", ignore_index=True)
+    n_obs = out[COUNT_COLUMN].astype("int32")
+    out = schema.conform(out)
+    out[COUNT_COLUMN] = n_obs.to_numpy()
+    return out
 
 
 def normalize(df):

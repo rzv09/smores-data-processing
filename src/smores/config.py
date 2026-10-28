@@ -26,6 +26,11 @@ BISCAYNE_HARVARD_DIR = BISCAYNE_DIR / "FULL data from Harvard team"
 # Harmonized outputs, written by the per-site modules in smores.data.
 FLORIDA_KEYS_PARQUET = PROCESSED_DIR / "florida_keys_o2.parquet"
 
+# 2-minute harmonized outputs and their integrity reports, written by
+# `smores.data.pipeline`.
+FLORIDA_KEYS_2MIN_PARQUET = PROCESSED_DIR / "florida_keys_o2_2min.parquet"
+BISCAYNE_BAY_2MIN_PARQUET = PROCESSED_DIR / "biscayne_bay_o2_2min.parquet"
+
 MODELS_DIR = PROJECT_ROOT / "models"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"

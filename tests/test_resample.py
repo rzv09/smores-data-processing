@@ -1,14 +1,18 @@
-"""The fixed-grid resampler.
+"""The fixed-grid resampler: both the shared 2-minute grid and the arbitrary-freq path.
 
 Everything here runs on small synthetic frames except the tests marked `slow`,
 which touch the real processed parquet. The synthetic frames carry the legacy
 column layout where that is what is under test, so the normalization path is
 exercised without the 62 MB file being present.
+
+`to_grid` (the pipeline grid) is covered at the bottom, against the shared
+`synthetic.schema_frame` the other pipeline tests use.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
+from synthetic import schema_frame
 
 from smores import config
 from smores.data import resample, schema
@@ -87,9 +91,17 @@ def test_normalize_translates_legacy_columns():
 
 
 def test_normalize_rejects_a_frame_it_cannot_fix():
-    frame = long_frame(rows=8).drop(columns="do_sat")
+    """A missing required column is filled with nulls, which `validate` then rejects."""
+    frame = long_frame(rows=8).drop(columns=schema.PRIMARY_SIGNAL)
     with pytest.raises(schema.SchemaError):
         resample.normalize(frame)
+
+
+def test_normalize_accepts_a_frame_missing_an_optional_column():
+    """`do_sat` is a secondary signal: absent is a valid frame, not a broken one."""
+    out = resample.normalize(long_frame(rows=8).drop(columns="do_sat"))
+    schema.validate(out)
+    assert out["do_sat"].isna().all()
 
 
 # ---------------------------------------------------------------------------
@@ -379,3 +391,67 @@ def test_real_parquet_bins_to_the_expected_shape():
     assert out["n_obs"].max() == 960
     assert out["n_obs"].mode().iloc[0] == 960
     assert out.groupby("deployment_id", observed=True)["timestamp"].is_monotonic_increasing.all()
+
+
+# ---------------------------------------------------------------------------
+# to_grid: the shared 2-minute pipeline grid
+# ---------------------------------------------------------------------------
+
+def test_grid_bins_are_labelled_by_their_start_and_hold_the_median():
+    frame = schema_frame(n=8, freq="30s", do_sat=[1.0, 2.0, 3.0, 100.0, 5.0, 6.0, 7.0, 8.0])
+    grid = resample.to_grid(frame)
+    assert grid["timestamp"].tolist() == [
+        pd.Timestamp("2026-01-01 00:00", tz="UTC"),
+        pd.Timestamp("2026-01-01 00:02", tz="UTC"),
+    ]
+    # The 100.0 spike moves the median of its bin by half a step, not by 25.
+    assert grid["do_sat"].tolist() == [2.5, 6.5]
+    assert grid["n_obs"].tolist() == [4, 4]
+
+
+def test_grid_output_conforms_to_the_schema_after_dropping_n_obs():
+    grid = resample.to_grid(schema_frame(n=10))
+    schema.validate(grid.drop(columns="n_obs"))
+
+
+def test_grid_bins_never_straddle_deployments_or_sensors():
+    a = schema_frame(n=4, sensor="S1", deployment="d1")
+    b = schema_frame(n=4, sensor="S1", deployment="d2", do_sat=50.0)
+    c = schema_frame(n=4, sensor="S2", deployment="d1", do_sat=70.0)
+    grid = resample.to_grid(pd.concat([a, b, c], ignore_index=True))
+    assert len(grid) == 3
+    assert sorted(grid["do_sat"].tolist()) == [50.0, 70.0, 100.0]
+
+
+def test_grid_good_readings_win_over_flagged_ones_in_a_mixed_bin():
+    frame = schema_frame(n=4, do_sat=[100.0, 100.0, 0.0, 0.0], qc_flag=[0, 0, 2, 2])
+    grid = resample.to_grid(frame)
+    assert grid["qc_flag"].tolist() == [0]
+    assert grid["do_sat"].tolist() == [100.0]
+    assert grid["n_obs"].tolist() == [2]
+
+
+def test_grid_a_bin_of_only_flagged_readings_stays_flagged():
+    grid = resample.to_grid(schema_frame(n=4, qc_flag=2))
+    assert grid["qc_flag"].tolist() == [2]
+
+
+def test_grid_min_obs_drops_underfilled_bins():
+    frame = schema_frame(n=5, freq="30s")  # one full bin of 4, one bin of 1
+    assert len(resample.to_grid(frame, min_obs=1)) == 2
+    assert len(resample.to_grid(frame, min_obs=2)) == 1
+
+
+def test_grid_empty_bins_are_absent_not_interpolated():
+    frame = schema_frame(n=3, freq="15min")
+    grid = resample.to_grid(frame)
+    assert len(grid) == 3
+    assert grid["timestamp"].diff().dropna().unique().tolist() == [
+        pd.Timedelta(minutes=14),
+        pd.Timedelta(minutes=16),
+    ]
+
+
+def test_grid_all_null_columns_stay_null():
+    grid = resample.to_grid(schema_frame(n=4, temperature_c=np.nan))
+    assert grid["temperature_c"].isna().all()

@@ -1,4 +1,4 @@
-.PHONY: setup test lint format data resample baselines clean
+.PHONY: setup test lint format data resample pipeline baselines clean
 
 setup:
 	uv sync
@@ -21,6 +21,9 @@ FREQ ?= 2min
 
 resample:
 	uv run python -m smores.data.resample --freq $(FREQ)
+
+pipeline:
+	uv run python -m smores.data.pipeline
 
 baselines:
 	uv run python -m smores.models.baselines
